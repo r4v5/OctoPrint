@@ -12,6 +12,8 @@ linux-Cura-*
 *.iml
 Printrun
 =======
+.python-version
+tags
 .idea
 .DS_Store
 Cura/current_profile.ini
