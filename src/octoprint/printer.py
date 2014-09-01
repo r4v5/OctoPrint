@@ -1,4 +1,7 @@
 # coding=utf-8
+from octoprint.comm.protocol.repetier import RepetierTextualProtocol
+from octoprint.comm.transport import Transport
+
 __author__ = "Gina Häußge <osd@foosel.net>"
 __license__ = 'GNU Affero General Public License http://www.gnu.org/licenses/agpl.html'
 
@@ -18,7 +21,7 @@ from octoprint.events import eventManager, Events
 
 from octoprint.filemanager.destinations import FileDestinations
 
-from octoprint.comm.protocol import State as ProtocolState
+from octoprint.comm.protocol import State as ProtocolState, Protocol
 from octoprint.comm.protocol.reprap import RepRapProtocol
 from octoprint.comm.transport.serialTransport import SerialTransport
 
@@ -67,7 +70,6 @@ class Printer():
 		self._sdPrinting = False
 		self._sdStreaming = False
 		self._sdFilelistAvailable = threading.Event()
-		self._sdRemoteName = None
 		self._streamingFinishedCallback = None
 
 		self._selectedFile = None
@@ -75,7 +77,7 @@ class Printer():
 		# comm
 		self._comm = None
 
-		self._protocol = RepRapProtocol(SerialTransport, protocol_listener=self)
+		self._protocol = self._createProtocol()
 
 		# callbacks
 		self._callbacks = []
@@ -89,7 +91,7 @@ class Printer():
 			addMessageCallback=self._sendAddMessageCallbacks
 		)
 		self._stateMonitor.reset(
-			state={"state": None, "stateString": self.getStateString(), "flags": self._getStateFlags()},
+			state={"text": self.getStateString(), "flags": self._getStateFlags()},
 			jobData={
 				"file": {
 					"name": None,
@@ -98,6 +100,7 @@ class Printer():
 					"date": None
 				},
 				"estimatedPrintTime": None,
+				"lastPrintTime": None,
 				"filament": {
 					"length": None,
 					"volume": None
@@ -106,6 +109,51 @@ class Printer():
 			progress={"completion": None, "filepos": None, "printTime": None, "printTimeLeft": None},
 			currentZ=None
 		)
+
+		eventManager().subscribe(Events.METADATA_ANALYSIS_FINISHED, self.onMetadataAnalysisFinished)
+
+	def _getTransportFactory(self):
+		transports = self._getSubclassAttributes(Transport, "__transportinfo__", validator=lambda x: not x[2])
+
+		transportType = settings().get(["communication", "transport"])
+		for t in transports:
+			id, name, abstract, factory = t
+			if transportType == id:
+				return factory
+
+		return SerialTransport
+
+	def _createProtocol(self):
+		transport = self._getTransportFactory()
+		protocol_type = settings().get(["communication", "protocol"])
+
+		protocols = self._getSubclassAttributes(Protocol, "__protocolinfo__", validator=lambda x: not x[2])
+
+		protocol_factory = RepRapProtocol
+		for p in protocols:
+			id, name, abstract, factory = p
+			if protocol_type == id:
+				protocol_factory = factory
+				break
+
+		return protocol_factory(transport, protocol_listener=self)
+
+	def _getSubclassAttributes(self, origin, attribute, converter=lambda o, v: v, validator=lambda x: True):
+		result = []
+
+		if hasattr(origin, attribute):
+			value = getattr(origin, attribute)
+			if validator(value):
+				converted = list(converter(origin, value))
+				converted.append(origin)
+				result.append(converted)
+
+		subclasses = origin.__subclasses__()
+		if subclasses:
+			for s in subclasses:
+				result.extend(self._getSubclassAttributes(s, attribute, converter, validator))
+
+		return result
 
 	#~~ callback handling
 
@@ -275,6 +323,14 @@ class Printer():
 
 		self._addLog("ERROR: %s" % error)
 
+	#~~ callback from metadata analysis event
+
+	def onMetadataAnalysisFinished(self, event, data):
+		if self._selectedFile:
+			self._setJobData(self._selectedFile["filename"],
+							 self._selectedFile["filesize"],
+							 self._selectedFile["sd"])
+
 	#~~ printer commands
 
 	def connect(self, port=None, baudrate=None):
@@ -304,48 +360,25 @@ class Printer():
 		}
 
 	def command(self, command):
-		"""
-		 Sends a single gcode command to the printer.
-		"""
-		self.commands([command])
+		self._protocol.send_manually(command)
 
 	def commands(self, commands):
-		"""
-		 Sends multiple gcode commands (provided as a list) to the printer.
-		"""
-		for command in commands:
-			self._protocol.send_manually(command)
+		self.command(commands)
 
 	def jog(self, axis, amount):
-		movementSpeed = settings().get(["printerParameters", "movementSpeed", ["x", "y", "z"]], asdict=True)
-		self.commands(["G91", "G1 %s%.4f F%d" % (axis.upper(), amount, movementSpeed[axis]), "G90"])
+		self._protocol.jog(axis, amount)
 
 	def home(self, axes):
-		self.commands(["G91", "G28 %s" % " ".join(map(lambda x: "%s0" % x.upper(), axes)), "G90"])
+		self._protocol.home(axes)
 
 	def extrude(self, amount):
-		extrusionSpeed = settings().get(["printerParameters", "movementSpeed", "e"])
-		self.commands(["G91", "G1 E%s F%d" % (amount, extrusionSpeed), "G90"])
+		self._protocol.extrude(amount)
 
 	def changeTool(self, tool):
-		try:
-			toolNum = int(tool[len("tool"):])
-			self.command("T%d" % toolNum)
-		except ValueError:
-			pass
+		self._protocol.change_tool(tool)
 
 	def setTemperature(self, type, value):
-		if type.startswith("tool"):
-			if settings().getInt(["printerParameters", "numExtruders"]) > 1:
-				try:
-					toolNum = int(type[len("tool"):])
-					self.command("M104 T%d S%f" % (toolNum, value))
-				except ValueError:
-					pass
-			else:
-				self.command("M104 S%f" % value)
-		elif type == "bed":
-			self.command("M140 S%f" % value)
+		self._protocol.set_temperature(type, value)
 
 	def setTemperatureOffset(self, offsets):
 		current_offsets = self._protocol.get_temperature_offsets()
@@ -426,7 +459,7 @@ class Printer():
 
 	def _setState(self, state):
 		self._state = state
-		self._stateMonitor.setState({"state": self._state, "stateString": self.getStateString(), "flags": self._getStateFlags()})
+		self._stateMonitor.setState({"text": self.getStateString(), "flags": self._getStateFlags()})
 
 	def _addLog(self, log):
 		self._log.append(log)
@@ -472,6 +505,7 @@ class Printer():
 			self._selectedFile = None
 
 		estimatedPrintTime = None
+		lastPrintTime = None
 		date = None
 		filament = None
 		if filename:
@@ -481,11 +515,14 @@ class Printer():
 				date = int(os.stat(filename).st_ctime)
 
 			fileData = self._gcodeManager.getFileData(filename)
-			if fileData is not None and "gcodeAnalysis" in fileData.keys():
-				if "estimatedPrintTime" in fileData["gcodeAnalysis"].keys():
-					estimatedPrintTime = fileData["gcodeAnalysis"]["estimatedPrintTime"]
-				if "filament" in fileData["gcodeAnalysis"].keys():
-					filament = fileData["gcodeAnalysis"]["filament"]
+			if fileData is not None:
+				if "gcodeAnalysis" in fileData:
+					if estimatedPrintTime is None and "estimatedPrintTime" in fileData["gcodeAnalysis"]:
+						estimatedPrintTime = fileData["gcodeAnalysis"]["estimatedPrintTime"]
+					if "filament" in fileData["gcodeAnalysis"].keys():
+						filament = fileData["gcodeAnalysis"]["filament"]
+				if "prints" in fileData and fileData["prints"] and "last" in fileData["prints"] and fileData["prints"]["last"] and "lastPrintTime" in fileData["prints"]["last"]:
+					lastPrintTime = fileData["prints"]["last"]["lastPrintTime"]
 
 		self._stateMonitor.setJobData({
 			"file": {
@@ -495,6 +532,7 @@ class Printer():
 				"date": date
 			},
 			"estimatedPrintTime": estimatedPrintTime,
+			"lastPrintTime": lastPrintTime,
 			"filament": filament,
 		})
 
@@ -502,9 +540,9 @@ class Printer():
 		try:
 			data = self._stateMonitor.getCurrentData()
 			data.update({
-				"tempHistory": list(self._temps),
-				"logHistory": list(self._log),
-				"messageHistory": list(self._messages)
+				"temps": list(self._temps),
+				"logs": list(self._log),
+				"messages": list(self._messages)
 			})
 			callback.sendHistoryData(data)
 		except Exception, err:
@@ -653,6 +691,7 @@ class StateMonitor(object):
 		self._offsets = {}
 
 		self._changeEvent = threading.Event()
+		self._stateMutex = threading.Lock()
 
 		self._lastUpdate = time.time()
 		self._worker = threading.Thread(target=self._work)
@@ -682,8 +721,9 @@ class StateMonitor(object):
 		self._changeEvent.set()
 
 	def setState(self, state):
-		self._state = state
-		self._changeEvent.set()
+		with self._stateMutex:
+			self._state = state
+			self._changeEvent.set()
 
 	def setJobData(self, jobData):
 		self._jobData = jobData
@@ -701,16 +741,17 @@ class StateMonitor(object):
 		while True:
 			self._changeEvent.wait()
 
-			now = time.time()
-			delta = now - self._lastUpdate
-			additionalWaitTime = self._ratelimit - delta
-			if additionalWaitTime > 0:
-				time.sleep(additionalWaitTime)
+			with self._stateMutex:
+				now = time.time()
+				delta = now - self._lastUpdate
+				additionalWaitTime = self._ratelimit - delta
+				if additionalWaitTime > 0:
+					time.sleep(additionalWaitTime)
 
-			data = self.getCurrentData()
-			self._updateCallback(data)
-			self._lastUpdate = time.time()
-			self._changeEvent.clear()
+				data = self.getCurrentData()
+				self._updateCallback(data)
+				self._lastUpdate = time.time()
+				self._changeEvent.clear()
 
 	def getCurrentData(self):
 		return {

@@ -10,6 +10,8 @@ from octoprint.comm.protocol.reprap import RepRapProtocol
 
 class RepetierTextualProtocol(RepRapProtocol):
 
+	__protocolinfo__ = ("repetier", "RepRap (Repetier Flavor)", False)
+
 	MESSAGE_TARGET_TEMPERATURE = staticmethod(lambda line: "TargetExtr" in line or "TargetBed" in line)
 
 	REGEX_POSITIVE_FLOAT = "[+]?[0-9]*\.?[0-9]+"
@@ -43,7 +45,7 @@ class RepetierTextualProtocol(RepRapProtocol):
 				pass
 
 			if key is None:
-				return
+				return False
 
 			if key in current_temperatures and current_temperatures[key] is not None and isinstance(current_temperatures[key], tuple):
 				(actual, old_target) = current_temperatures[key]

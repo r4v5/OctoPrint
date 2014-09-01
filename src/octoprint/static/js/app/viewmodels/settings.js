@@ -6,11 +6,43 @@ function SettingsViewModel(loginStateViewModel, usersViewModel) {
 
     self.api_enabled = ko.observable(undefined);
     self.api_key = ko.observable(undefined);
+    self.api_allowCrossOrigin = ko.observable(undefined);
 
     self.appearance_name = ko.observable(undefined);
     self.appearance_color = ko.observable(undefined);
 
-    self.appearance_available_colors = ko.observable(["default", "red", "orange", "yellow", "green", "blue", "violet", "black"]);
+    self.appearance_available_colors = ko.observable([
+        {key: "default", name: gettext("default")},
+        {key: "red", name: gettext("red")},
+        {key: "orange", name: gettext("orange")},
+        {key: "yellow", name: gettext("yellow")},
+        {key: "green", name: gettext("green")},
+        {key: "blue", name: gettext("blue")},
+        {key: "violet", name: gettext("violet")},
+        {key: "black", name: gettext("black")},
+    ]);
+    self.appearance_colorName = function(color) {
+        switch (color) {
+            case "red":
+                return gettext("red");
+            case "orange":
+                return gettext("orange");
+            case "yellow":
+                return gettext("yellow");
+            case "green":
+                return gettext("green");
+            case "blue":
+                return gettext("blue");
+            case "violet":
+                return gettext("violet");
+            case "black":
+                return gettext("black");
+            case "default":
+                return gettext("default");
+            default:
+                return color;
+        }
+    };
 
     self.printer_movementSpeedX = ko.observable(undefined);
     self.printer_movementSpeedY = ko.observable(undefined);
@@ -18,6 +50,7 @@ function SettingsViewModel(loginStateViewModel, usersViewModel) {
     self.printer_movementSpeedE = ko.observable(undefined);
     self.printer_invertAxes = ko.observable(undefined);
     self.printer_numExtruders = ko.observable(undefined);
+    self.printer_defaultExtrusionLength = ko.observable(undefined);
 
     self._printer_extruderOffsets = ko.observableArray([]);
     self.printer_extruderOffsets = ko.computed({
@@ -121,6 +154,7 @@ function SettingsViewModel(loginStateViewModel, usersViewModel) {
     self.folder_timelapse = ko.observable(undefined);
     self.folder_timelapseTmp = ko.observable(undefined);
     self.folder_logs = ko.observable(undefined);
+    self.folder_watched = ko.observable(undefined);
 
     self.cura_enabled = ko.observable(undefined);
     self.cura_path = ko.observable(undefined);
@@ -188,6 +222,7 @@ function SettingsViewModel(loginStateViewModel, usersViewModel) {
     self.fromResponse = function(response) {
         self.api_enabled(response.api.enabled);
         self.api_key(response.api.key);
+        self.api_allowCrossOrigin(response.api.allowCrossOrigin);
 
         self.appearance_name(response.appearance.name);
         self.appearance_color(response.appearance.color);
@@ -200,6 +235,7 @@ function SettingsViewModel(loginStateViewModel, usersViewModel) {
         self.printer_numExtruders(response.printer.numExtruders);
         self.printer_extruderOffsets(response.printer.extruderOffsets);
         self.printer_bedDimensions(response.printer.bedDimensions);
+        self.printer_defaultExtrusionLength(response.printer.defaultExtrusionLength);
 
         self.webcam_streamUrl(response.webcam.streamUrl);
         self.webcam_snapshotUrl(response.webcam.snapshotUrl);
@@ -234,6 +270,7 @@ function SettingsViewModel(loginStateViewModel, usersViewModel) {
         self.folder_timelapse(response.folder.timelapse);
         self.folder_timelapseTmp(response.folder.timelapseTmp);
         self.folder_logs(response.folder.logs);
+        self.folder_watched(response.folder.watched);
 
         self.cura_enabled(response.cura.enabled);
         self.cura_path(response.cura.path);
@@ -250,7 +287,8 @@ function SettingsViewModel(loginStateViewModel, usersViewModel) {
         var data = {
             "api" : {
                 "enabled": self.api_enabled(),
-                "key": self.api_key()
+                "key": self.api_key(),
+                "allowCrossOrigin": self.api_allowCrossOrigin()
             },
             "appearance" : {
                 "name": self.appearance_name(),
@@ -264,7 +302,8 @@ function SettingsViewModel(loginStateViewModel, usersViewModel) {
                 "invertAxes": self.printer_invertAxes(),
                 "numExtruders": self.printer_numExtruders(),
                 "extruderOffsets": self.printer_extruderOffsets(),
-                "bedDimensions": self.printer_bedDimensions()
+                "bedDimensions": self.printer_bedDimensions(),
+                "defaultExtrusionLength": self.printer_defaultExtrusionLength()
             },
             "webcam": {
                 "streamUrl": self.webcam_streamUrl(),
@@ -300,7 +339,8 @@ function SettingsViewModel(loginStateViewModel, usersViewModel) {
                 "uploads": self.folder_uploads(),
                 "timelapse": self.folder_timelapse(),
                 "timelapseTmp": self.folder_timelapseTmp(),
-                "logs": self.folder_logs()
+                "logs": self.folder_logs(),
+                "watched": self.folder_watched()
             },
             "temperature": {
                 "profiles": self.temperature_profiles()
